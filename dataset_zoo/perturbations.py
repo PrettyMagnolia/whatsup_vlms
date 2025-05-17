@@ -38,8 +38,6 @@ def get_image_perturb_fn(image_perturb_fn):
     else:
         print("Unknown image perturbation function: {}, returning None".format(image_perturb_fn))
         return None
-    
-
 
 class TextShuffler:
 

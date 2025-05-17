@@ -1,3 +1,5 @@
-ARO_ROOT = "data"
-COCO_ROOT = "data"
-FLICKR_ROOT = "data"
+ARO_ROOT = "/mnt/shared/whatsup/data_aro"
+COCO_ROOT = "/mnt/shared/whatsup/data_coco"
+FLICKR_ROOT = "/mnt/shared/whatsup/data_flickr"
+VL_CHECKLIST_ROOT = "/mnt/shared/whatsup/data_vl_checklist"
+SUGARCREPE_ROOT = "/mnt/shared/whatsup/data_sugarcrepe"

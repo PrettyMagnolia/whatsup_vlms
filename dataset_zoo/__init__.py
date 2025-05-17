@@ -41,6 +41,12 @@ def get_dataset(dataset_name, image_preprocess=None, text_perturb_fn=None, image
     elif dataset_name == "VG_QA_two_obj":
         from .aro_datasets import get_vg_qa_two_obj
         return get_vg_qa_two_obj(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, *args, **kwargs)
+    elif dataset_name == 'VL_CheckList':
+        from .aro_datasets import get_vl_checklist
+        return get_vl_checklist(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, *args, **kwargs)
+    elif dataset_name == "Sugarcrepe":
+        from .aro_datasets import get_sugarcrepe
+        return get_sugarcrepe(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, *args, **kwargs)
     elif dataset_name == "COCO_Retrieval":
         from .retrieval import get_coco_retrieval
         return get_coco_retrieval(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, *args, **kwargs)

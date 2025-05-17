@@ -12,7 +12,7 @@ from easydict import EasyDict as edict
 from torchvision.datasets.utils import download_url
 
 from .perturbations import TextShuffler
-from .constants import ARO_ROOT, COCO_ROOT, FLICKR_ROOT
+from .constants import ARO_ROOT, COCO_ROOT, FLICKR_ROOT, VL_CHECKLIST_ROOT, SUGARCREPE_ROOT
 from .retrieval import pre_caption
 
 
@@ -103,7 +103,13 @@ class VG_Relation(Dataset):
                 "Count": relation_mask.sum(),
                 "Dataset": "Visual Genome Relation"
             })
-        return result_records
+        result_records.append({
+            "Relation": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "Visual Genome Relation"
+        })
+        return result_records, np.mean(correct_mask)
 
 
 
@@ -189,7 +195,13 @@ class VG_Attribution(Dataset):
                 "Count": attr_mask.sum(),
                 "Dataset": "Visual Genome Attribution"
             })
-        return result_records
+        result_records.append({
+            "Attributes": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "Visual Genome Attribution"
+        })
+        return result_records, np.mean(correct_mask)
 
 
 
@@ -206,39 +218,42 @@ class COCO_Order(Dataset):
         image_perturb_fn: not used; for compatibility.
         download: Whether to download the dataset if it does not exist.
         """
-        shuffler = TextShuffler()
-        perturb_functions = [shuffler.shuffle_nouns_and_adj, shuffler.shuffle_allbut_nouns_and_adj,
-                             shuffler.shuffle_within_trigrams, shuffler.shuffle_trigrams]
+        # shuffler = TextShuffler()
+        # perturb_functions = [shuffler.shuffle_nouns_and_adj, shuffler.shuffle_allbut_nouns_and_adj,
+        #                      shuffler.shuffle_within_trigrams, shuffler.shuffle_trigrams]
 
-        self.root_dir = root_dir
-        if not os.path.exists(root_dir):
-            print("Directory for COCO could not be found!")
-            if download:
-                print("Downloading COCO now.")
-                self.download()
-            else:
-                raise RuntimeError("Please either download the dataset by letting `--download` or specify the correct directory.")
+        # self.root_dir = root_dir
+        # if not os.path.exists(root_dir):
+        #     print("Directory for COCO could not be found!")
+        #     if download:
+        #         print("Downloading COCO now.")
+        #         self.download()
+        #     else:
+        #         raise RuntimeError("Please either download the dataset by letting `--download` or specify the correct directory.")
         
-        urls = {'val':'https://storage.googleapis.com/sfr-vision-language-research/datasets/coco_karpathy_val.json',
-                'test':'https://storage.googleapis.com/sfr-vision-language-research/datasets/coco_karpathy_test.json'}
-        filenames = {'val':'coco_karpathy_val.json','test':'coco_karpathy_test.json'}
-        download_url(urls[split],root_dir)
+        # urls = {'val':'https://storage.googleapis.com/sfr-vision-language-research/datasets/coco_karpathy_val.json',
+        #         'test':'https://storage.googleapis.com/sfr-vision-language-research/datasets/coco_karpathy_test.json'}
+        # filenames = {'val':'coco_karpathy_val.json','test':'coco_karpathy_test.json'}
+        # download_url(urls[split],root_dir)
         
-        self.annotation = json.load(open(os.path.join(root_dir,filenames[split]),'r'))
+        # self.annotation = json.load(open(os.path.join(root_dir,filenames[split]),'r'))
         self.image_preprocess = image_preprocess
-        self.image_root = root_dir
+        self.image_root = os.path.join(root_dir, 'images')
         
-        self.test_cases = []
+        self.test_cases = json.load(open(os.path.join(root_dir ,'coco.json'),'r'))
+        # self.test_cases = []
         
-        for img_id, ann in tqdm(enumerate(self.annotation)):
-            for i, caption in enumerate(ann['caption']):
-                test_case = {}
-                test_case["image"] = ann["image"]
-                test_case["caption_options"] = [pre_caption(caption,max_words)]
+        # for img_id, ann in tqdm(enumerate(self.annotation), total=len(self.annotation)):
+        #     for i, caption in enumerate(ann['caption']):
+        #         test_case = {}
+        #         test_case["image"] = ann["image"]
+        #         test_case["caption_options"] = [pre_caption(caption,max_words)]
 
-                for perturb_fn in perturb_functions:
-                    test_case["caption_options"].append(pre_caption(perturb_fn(caption), max_words))
-                self.test_cases.append(test_case)
+        #         for perturb_fn in perturb_functions:
+        #             test_case["caption_options"].append(pre_caption(perturb_fn(caption), max_words))
+        #         self.test_cases.append(test_case)
+        
+        # json.dump(self.test_cases, open('/home/yifei/code/whatsup_vlms/coco.json', 'w'))
                                     
     def __len__(self):
         return len(self.test_cases)
@@ -279,7 +294,7 @@ class COCO_Order(Dataset):
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
         records = [{"Precision@1": np.mean(correct_mask)}]
-        return records
+        return records, np.mean(correct_mask)
 
 
 class Flickr30k_Order(Dataset):
@@ -291,41 +306,42 @@ class Flickr30k_Order(Dataset):
         root_dir: The directory of the flickr30k images. This should contain the `flickr30k-images` directory that \
             contains all the images. 
         """
-        urls = {'val':'https://storage.googleapis.com/sfr-vision-language-research/datasets/flickr30k_val.json',
-                'test':'https://storage.googleapis.com/sfr-vision-language-research/datasets/flickr30k_test.json'}
-        filenames = {'val':'flickr30k_val.json','test':'flickr30k_test.json'}
-        if not os.path.exists(root_dir):
-            print("Directory for Flickr30k could not be found!")
-            flickr_url = "https://forms.illinois.edu/sec/229675"
-            raise RuntimeError(f"You need to manually sign up and download the dataset from {flickr_url} and place it in the `root_dir`.")
+        # urls = {'val':'https://storage.googleapis.com/sfr-vision-language-research/datasets/flickr30k_val.json',
+        #         'test':'https://storage.googleapis.com/sfr-vision-language-research/datasets/flickr30k_test.json'}
+        # filenames = {'val':'flickr30k_val.json','test':'flickr30k_test.json'}
+        # if not os.path.exists(root_dir):
+        #     print("Directory for Flickr30k could not be found!")
+        #     flickr_url = "https://forms.illinois.edu/sec/229675"
+        #     raise RuntimeError(f"You need to manually sign up and download the dataset from {flickr_url} and place it in the `root_dir`.")
         
-        download_url(urls[split],root_dir)
+        # download_url(urls[split],root_dir)
         
-        self.annotation = json.load(open(os.path.join(root_dir,filenames[split]),'r'))
+        # self.annotation = json.load(open(os.path.join(root_dir,filenames[split]),'r'))
         self.image_preprocess = image_preprocess
         self.root_dir = root_dir
+        self.image_dir = os.path.join(root_dir, "images")
         
-        self.test_cases = []
+        self.test_cases = json.load(open(os.path.join(self.root_dir, 'flickr.json'),'r'))
         
-        shuffler = TextShuffler()
-        perturb_functions = [shuffler.shuffle_nouns_and_adj, shuffler.shuffle_allbut_nouns_and_adj,
-                             shuffler.shuffle_within_trigrams, shuffler.shuffle_trigrams]
-        for img_id, ann in tqdm(enumerate(self.annotation)):
-            for i, caption in enumerate(ann['caption']):
-                test_case = {}
-                test_case["image"] = ann["image"]
-                test_case["caption_options"] = [pre_caption(caption,max_words)]
+        # shuffler = TextShuffler()
+        # perturb_functions = [shuffler.shuffle_nouns_and_adj, shuffler.shuffle_allbut_nouns_and_adj,
+        #                      shuffler.shuffle_within_trigrams, shuffler.shuffle_trigrams]
+        # for img_id, ann in tqdm(enumerate(self.annotation), total=len(self.annotation)):
+        #     for i, caption in enumerate(ann['caption']):
+        #         test_case = {}
+        #         test_case["image"] = ann["image"]
+        #         test_case["caption_options"] = [pre_caption(caption,max_words)]
 
-                for perturb_fn in perturb_functions:
-                    test_case["caption_options"].append(pre_caption(perturb_fn(caption), max_words))
-                self.test_cases.append(test_case)
+        #         for perturb_fn in perturb_functions:
+        #             test_case["caption_options"].append(pre_caption(perturb_fn(caption), max_words))
+        #         self.test_cases.append(test_case)
                                 
     def __len__(self):
         return len(self.test_cases)
     
     def __getitem__(self, index):  
         test_case = self.test_cases[index]  
-        image_path = os.path.join(self.root_dir, test_case["image"])        
+        image_path = os.path.join(self.image_dir, test_case["image"])        
         image = Image.open(image_path).convert('RGB')    
         
         if self.image_preprocess is not None: 
@@ -345,7 +361,7 @@ class Flickr30k_Order(Dataset):
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
         result_records = [{"Precision@1": np.mean(correct_mask)}]
-        return result_records
+        return result_records, np.mean(correct_mask)
 
 
 class Controlled_Images(Dataset):
@@ -428,7 +444,7 @@ class Controlled_Images(Dataset):
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
-        image = Image.open(test_case["image_path"]).convert('RGB')
+        image = Image.open(test_case["image_path"].replace('data', ARO_ROOT)).convert('RGB')
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
         
@@ -514,7 +530,13 @@ class Controlled_Images(Dataset):
                 "Count": prepositions_mask.sum(),
                 "Dataset": "Controlled Images - {}".format(self.subset)
             })
-        return result_records
+        result_records.append({
+            "Preposition": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "Controlled Images - {}".format(self.subset)
+        })
+        return result_records, np.mean(correct_mask)
 
 
 class COCO_QA(Dataset):
@@ -591,7 +613,7 @@ class COCO_QA(Dataset):
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
         metrics["Accuracy"] = np.mean(correct_mask)
-        print(metrics['Accuracy']*100)
+        # print(metrics['Accuracy']*100)
 
         all_prepositions = np.array(self.all_prepositions)
 
@@ -617,7 +639,13 @@ class COCO_QA(Dataset):
                 "Count": prepositions_mask.sum(),
                 "Dataset": "COCO-QA {}-object".format(self.subset)
             })
-        return result_records
+        result_records.append({
+            "Preposition": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "COCO-QA {}-object".format(self.subset)
+        })
+        return result_records, np.mean(correct_mask)
 
 class VG_QA(Dataset):
     def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='one'):
@@ -695,7 +723,7 @@ class VG_QA(Dataset):
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
         metrics["Accuracy"] = np.mean(correct_mask)
-        print(metrics['Accuracy']*100)
+        # print(metrics['Accuracy']*100)
 
         all_prepositions = np.array(self.all_prepositions)
         
@@ -721,7 +749,177 @@ class VG_QA(Dataset):
                 "Count": prepositions_mask.sum(),
                 "Dataset": "VG-QA {}-object".format(self.subset)
             })
-        return result_records
+        result_records.append({
+            "Preposition": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "VG-QA {}-object".format(self.subset)
+        })
+        return result_records, np.mean(correct_mask)
+
+class VL_CheckList(Dataset):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False):
+        '''
+        image_preprocess: a function that takes in a PIL image and returns a tensor.
+        text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
+        image_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
+        root_dir: Directory for the VG-R dataset.
+        download: Whether to download the dataset if it does not exist.
+        '''
+        self.root_dir = root_dir
+        annotation_file = os.path.join(root_dir, "annotations.json")
+        image_dir = os.path.join(root_dir, "images")
+        if not os.path.exists(image_dir):
+            print("Image Directory for VG_Relation could not be found!")
+            if download:
+                self.download()
+            else:
+                raise RuntimeError("Please either download the dataset by letting `--download` or specify the correct directory.")
+        
+        if not os.path.exists(annotation_file):
+            raise RuntimeError("Annotation file for VL_CheckList could not be found!")
+                
+        with open(annotation_file, "r") as f:
+            self.dataset = json.load(f)
+        
+        self.all_types = list()
+        for item in self.dataset:
+            item["image_path"] = os.path.join(image_dir, item["img_path"])
+            self.all_types.append(item["type"])
+        
+        self.image_preprocess = image_preprocess
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        test_case = self.dataset[index]
+        image = Image.open(test_case["image_path"]).convert('RGB')
+
+        if self.image_preprocess is not None:
+            image = self.image_preprocess(image)
+        
+        true_caption = test_case["POS"][0]
+        false_caption = test_case["NEG"][0]
+        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        return item
+    
+    def evaluate_scores(self, scores):
+        """
+        Scores: N x 1 x 2, i.e. first caption is the perturbed one, second is the positive one
+        """
+        if isinstance(scores, tuple):
+            scores_i2t = scores[1]
+            scores_t2i = scores[0] 
+        else:
+            scores_t2i = scores
+            scores_i2t = scores
+
+        preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
+        correct_mask = (preds == 1)
+
+        all_types = np.array(self.all_types)
+
+        result_records = []
+        for attr in np.unique(all_types):
+            attr_mask = (all_types == attr)
+            if attr_mask.sum() == 0:
+                continue
+            result_records.append({
+                "Attributes": attr,
+                "Accuracy": correct_mask[attr_mask].mean(),
+                "Count": attr_mask.sum(),
+                "Dataset": "VL_CheckList"
+            })
+        result_records.append({
+            "Attributes": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "VL_CheckList"
+        })
+        return result_records, np.mean(correct_mask)
+
+class Sugarcrepe(Dataset):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False):
+        '''
+        image_preprocess: a function that takes in a PIL image and returns a tensor.
+        text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
+        image_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
+        root_dir: Directory for the VG-R dataset.
+        download: Whether to download the dataset if it does not exist.
+        '''
+        self.root_dir = root_dir
+        annotation_file = os.path.join(root_dir, "sugarcrepe.json")
+        image_dir = os.path.join(root_dir, "images")
+        if not os.path.exists(image_dir):
+            print("Image Directory for VG_Relation could not be found!")
+            if download:
+                self.download()
+            else:
+                raise RuntimeError("Please either download the dataset by letting `--download` or specify the correct directory.")
+        
+        if not os.path.exists(annotation_file):
+            raise RuntimeError("Annotation file for VL_CheckList could not be found!")
+                
+        with open(annotation_file, "r") as f:
+            self.dataset = json.load(f)
+        
+        self.all_types = list()
+        for item in self.dataset:
+            item["image_path"] = os.path.join(image_dir, item["img_path"])
+            self.all_types.append(item["type"])
+        
+        self.image_preprocess = image_preprocess
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        test_case = self.dataset[index]
+        image = Image.open(test_case["image_path"]).convert('RGB')
+
+        if self.image_preprocess is not None:
+            image = self.image_preprocess(image)
+        
+        true_caption = test_case["POS"]
+        false_caption = test_case["NEG"]
+        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        return item
+    
+    def evaluate_scores(self, scores):
+        """
+        Scores: N x 1 x 2, i.e. first caption is the perturbed one, second is the positive one
+        """
+        if isinstance(scores, tuple):
+            scores_i2t = scores[1]
+            scores_t2i = scores[0] 
+        else:
+            scores_t2i = scores
+            scores_i2t = scores
+
+        preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
+        correct_mask = (preds == 1)
+
+        all_types = np.array(self.all_types)
+
+        result_records = []
+        for attr in np.unique(all_types):
+            attr_mask = (all_types == attr)
+            if attr_mask.sum() == 0:
+                continue
+            result_records.append({
+                "Attributes": attr,
+                "Accuracy": correct_mask[attr_mask].mean(),
+                "Count": attr_mask.sum(),
+                "Dataset": "VL_CheckList"
+            })
+        result_records.append({
+            "Attributes": "Overall",
+            "Accuracy": np.mean(correct_mask),
+            "Count": len(correct_mask),
+            "Dataset": "VL_CheckList"
+        })
+        return result_records, np.mean(correct_mask)
 
 
 def get_visual_genome_relation(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
@@ -764,6 +962,11 @@ def get_flickr30k_order(image_preprocess, image_perturb_fn, text_perturb_fn, max
     return Flickr30k_Order(root_dir=root_dir, split=split, image_preprocess=image_preprocess, image_perturb_fn=image_perturb_fn, max_words=max_words, 
                             download=download)
 
+def get_vl_checklist(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=VL_CHECKLIST_ROOT):
+    return VL_CheckList(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
+                   image_perturb_fn=image_perturb_fn, root_dir=root_dir)
 
-
+def get_sugarcrepe(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=SUGARCREPE_ROOT):
+    return Sugarcrepe(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
+                   image_perturb_fn=image_perturb_fn, root_dir=root_dir)
 

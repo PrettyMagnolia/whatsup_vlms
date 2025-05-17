@@ -3,3 +3,5 @@ clip
 scipy
 fairscale
 gdown
+pandas
+easydict
