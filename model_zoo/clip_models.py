@@ -74,8 +74,9 @@ class CLIPWrapper:
         tqdm_loader.set_description("Computing retrieval scores")
         for batch in tqdm_loader:
             image_options = []
-            for i_option in batch["image_options"]:
-                image_embeddings = self.model.encode_image(i_option.to(self.device)).cpu().numpy() # B x D
+            for i_option, vm_option in zip(batch["image_options"], batch["vm"]):
+                vm_option = vm_option.to(self.device) if vm_option is not None else None
+                image_embeddings = self.model.encode_image(i_option.to(self.device), vm_option).cpu().numpy() # B x D
                 image_embeddings = image_embeddings / np.linalg.norm(image_embeddings, axis=1, keepdims=True) # B x D
                 image_options.append(np.expand_dims(image_embeddings, axis=1))
             

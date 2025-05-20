@@ -14,7 +14,7 @@ from model_zoo.clip_models import CLIPWrapper
 def config():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda", type=str)
-    parser.add_argument("--batch-size", default=256, type=int)
+    parser.add_argument("--batch-size", default=512, type=int)
     parser.add_argument("--num_workers", default=24, type=int)
     parser.add_argument("--model-name", type=str, default='ViT-B-32')
     parser.add_argument("--pretrained", type=str, default='/mnt/shared/models/open_clip/CLIP-ViT-B-32-laion2B-s34B-b79K/open_clip_pytorch_model.bin')
@@ -27,6 +27,8 @@ def config():
     parser.add_argument("--download", action="store_true", help="Whether to download the dataset if it doesn't exist. (Default: True)", default=True)
     parser.add_argument("--save-scores", action="store_true", help="Whether to save the scores for the retrieval to analyze later.")
     parser.add_argument("--output-dir", default="./outputs", type=str)
+    parser.add_argument("--exp-name", type=str, default="open_clip_test")
+    parser.add_argument("--use-vm", type=bool, default=False, help="Whether to use the visual mask for the model.")
     return parser.parse_args()
 
     
@@ -38,22 +40,30 @@ def main(args):
     model = CLIPWrapper(model, args.device) 
 
     datasets = [
-        # "VG_Relation",
-        # "VG_Attribution",
-        # "COCO_Order",
-        # "Flickr30k_Order",
-        # "Controlled_Images_A",
-        # "Controlled_Images_B",
-        # "COCO_QA_one_obj",
-        # "COCO_QA_two_obj",
-        # "VG_QA_one_obj",
-        # "VG_QA_two_obj",
-        # "VL_CheckList",
-        "Sugarcrepe"
+        "VG_Attribution",
+        "VG_Relation",
+        "COCO_Order",
+        "Flickr30k_Order",
+        "Controlled_Images_A",
+        "Controlled_Images_B",
+        "COCO_QA_one_obj",
+        "COCO_QA_two_obj",
+        "VG_QA_one_obj",
+        "VG_QA_two_obj",
+        "VL_CheckList",
+        "Sugarcrepe",
     ]
     
-    res = {}
+    args.output_dir = os.path.join(args.output_dir, args.exp_name)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
     for dataset_name in datasets:
+        output_file = os.path.join(args.output_dir, f"{dataset_name}.csv")
+        if os.path.exists(output_file):
+            print(f"Results for {dataset_name} already exist. Skipping...")
+            # continue
+
         dataset = get_dataset(dataset_name, image_preprocess=image_preprocess, download=args.download)
         
         # For some models we just pass the PIL images, so we'll need to handle them in the collate_fn. 
@@ -63,13 +73,10 @@ def main(args):
 
         scores = model.get_retrieval_scores_batched(joint_loader)
         result_records, total_acc = dataset.evaluate_scores(scores)
-
-        res[dataset] = total_acc
         
         for record in result_records:
             record.update({"Model": args.model_name, "Dataset": dataset_name, "Seed": args.seed})
         
-        output_file = os.path.join(args.output_dir, f"{dataset_name}.csv")
         df = pd.DataFrame(result_records)
         print(f"Saving results to {output_file}")
         if os.path.exists(output_file):
@@ -83,9 +90,7 @@ def main(args):
         if args.save_scores:
             save_scores(scores, args)
     
-    print(res)
 
-    
 if __name__ == "__main__":
     args = config()
     main(args)

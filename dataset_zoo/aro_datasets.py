@@ -2,7 +2,7 @@ import pdb
 import os
 import json
 import subprocess
-
+import copy
 import numpy as np
 
 from PIL import Image
@@ -14,7 +14,9 @@ from torchvision.datasets.utils import download_url
 from .perturbations import TextShuffler
 from .constants import ARO_ROOT, COCO_ROOT, FLICKR_ROOT, VL_CHECKLIST_ROOT, SUGARCREPE_ROOT
 from .retrieval import pre_caption
+from .utils import get_visible_matrix_v2
 
+use_vm = True
 
 class VG_Relation(Dataset):
     def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False):
@@ -47,6 +49,8 @@ class VG_Relation(Dataset):
             self.all_relations.append(item["relation_name"])
 
         self.image_preprocess = image_preprocess
+        self.use_vm = use_vm
+        
 
     def __len__(self):
         return len(self.dataset)
@@ -55,15 +59,23 @@ class VG_Relation(Dataset):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
         # Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
-        image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
+        # image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+        
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+
 
         # Each test case has a correct and incorrect caption.
         true_caption = test_case["true_caption"]
         false_caption = test_case["false_caption"]
-        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
         return item
     
     def download(self):
@@ -152,15 +164,22 @@ class VG_Attribution(Dataset):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
         # Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
-        image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
+        # image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
 
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+
         # Each test case has a correct and incorrect caption.
         true_caption = test_case["true_caption"]
         false_caption = test_case["false_caption"]
-        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
         return item
     
     def download(self):
@@ -254,6 +273,7 @@ class COCO_Order(Dataset):
         #         self.test_cases.append(test_case)
         
         # json.dump(self.test_cases, open('/home/yifei/code/whatsup_vlms/coco.json', 'w'))
+        self.image_preprocess = image_preprocess
                                     
     def __len__(self):
         return len(self.test_cases)
@@ -265,8 +285,15 @@ class COCO_Order(Dataset):
         image = Image.open(image_path).convert('RGB')    
         if self.image_preprocess is not None: 
             image = self.image_preprocess(image)  
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = image_path.replace("images", "edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
-        item = edict({"image_options": [image], "caption_options": test_case["caption_options"]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case["caption_options"]})
         return item
     
     def download(self):
@@ -293,7 +320,7 @@ class COCO_Order(Dataset):
         
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
-        records = [{"Precision@1": np.mean(correct_mask)}]
+        records = [{"Accuracy": np.mean(correct_mask)}]
         return records, np.mean(correct_mask)
 
 
@@ -347,7 +374,14 @@ class Flickr30k_Order(Dataset):
         if self.image_preprocess is not None: 
             image = self.image_preprocess(image)  
             
-        item = edict({"image_options": [image], "caption_options": test_case["caption_options"]})
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = image_path.replace("images", "edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+        
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case["caption_options"]})
         return item
     
     def evaluate_scores(self, scores):
@@ -360,7 +394,7 @@ class Flickr30k_Order(Dataset):
         
         preds = np.argmax(np.squeeze(scores_i2t, axis=1), axis=-1)
         correct_mask = (preds == 0)
-        result_records = [{"Precision@1": np.mean(correct_mask)}]
+        result_records = [{"Accuracy": np.mean(correct_mask)}]
         return result_records, np.mean(correct_mask)
 
 
@@ -444,11 +478,22 @@ class Controlled_Images(Dataset):
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
+        image_path = test_case["image_path"].replace('data', ARO_ROOT)
         image = Image.open(test_case["image_path"].replace('data', ARO_ROOT)).convert('RGB')
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            if self.subset == 'A':
+                edge_path = image_path.replace("controlled_images", "controlled_images_edges").replace(".jpeg", "_edges.pkl")
+            else:
+                edge_path = image_path.replace("controlled_clevr", "controlled_clevr_edges").replace(".jpeg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
-        item = edict({"image_options": [image], "caption_options": test_case['caption_options']})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case['caption_options']})
         return item
 
     def download(self):
@@ -584,11 +629,19 @@ class COCO_QA(Dataset):
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
+        image_path = os.path.join(self.root_dir, 'val2017/{}.jpg'.format(str(test_case[0]).zfill(12)))
         image = Image.open(os.path.join(self.root_dir, 'val2017/{}.jpg'.format(str(test_case[0]).zfill(12)))).convert('RGB')
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = image_path.replace("val2017", "val2017_edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
-        item = edict({"image_options": [image], "caption_options": [test_case[1], test_case[2]]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [test_case[1], test_case[2]]})
         return item
 
     def download(self):
@@ -694,11 +747,19 @@ class VG_QA(Dataset):
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
+        image_path = os.path.join(self.root_dir, 'vg_images/{}.jpg'.format(test_case[0]))
         image = Image.open(os.path.join(self.root_dir, 'vg_images/{}.jpg'.format(test_case[0]))).convert('RGB')
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = image_path.replace("vg_images", "vg_images_edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
-        item = edict({"image_options": [image], "caption_options": [test_case[1], test_case[2]]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [test_case[1], test_case[2]]})
         return item
 
     def download(self):
@@ -798,10 +859,17 @@ class VL_CheckList(Dataset):
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = test_case["image_path"].replace("images", "edges", 1).replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
         true_caption = test_case["POS"][0]
         false_caption = test_case["NEG"][0]
-        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
         return item
     
     def evaluate_scores(self, scores):
@@ -880,10 +948,17 @@ class Sugarcrepe(Dataset):
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
+
+        vm = None
+        if use_vm:
+            edge_preprocess = copy.deepcopy(self.image_preprocess)
+            edge_preprocess.transforms = edge_preprocess.transforms[:2]
+            edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
+            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
         
         true_caption = test_case["POS"]
         false_caption = test_case["NEG"]
-        item = edict({"image_options": [image], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
         return item
     
     def evaluate_scores(self, scores):
