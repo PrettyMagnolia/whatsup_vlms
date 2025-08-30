@@ -4,6 +4,7 @@
     // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
             "name": "open_clip_test",
             "type": "debugpy",
@@ -13,9 +14,10 @@
             "justMyCode": false,
              "args": [
                 "--model-name", "ViT-B-32",
-                "--pretrained", "/home/yifei/code/open_clip/logs/Objects-CLIP-obj-tok/checkpoints/epoch_best.pt",
+                "--pretrained", "/home/yifei/code/open_clip/logs/Objects-CLIP-CC3M/checkpoints/epoch_best.pt",
                 "--output-dir", "/mnt/user_data/yifei/outputs/whatsup/",
-                "--exp-name", "Objects-CLIP-obj-tok-test"
+                "--exp-name", "Objects-CLIP-CC3M",
+                "--use_obj_token",
             ],
         }
     ]

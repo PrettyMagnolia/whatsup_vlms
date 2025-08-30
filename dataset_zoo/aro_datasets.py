@@ -4,6 +4,7 @@ import json
 import subprocess
 import copy
 import numpy as np
+import torch
 
 from PIL import Image
 from tqdm import tqdm
@@ -14,12 +15,44 @@ from torchvision.datasets.utils import download_url
 from .perturbations import TextShuffler
 from .constants import ARO_ROOT, COCO_ROOT, FLICKR_ROOT, VL_CHECKLIST_ROOT, SUGARCREPE_ROOT
 from .retrieval import pre_caption
-from .utils import get_visible_matrix_v2, get_object_token_attention_mask_v2
+from .utils import get_visible_matrix_v2, get_object_token_attention_mask_v2, get_obj_token_mask, get_img_token_vm_mask
 
-use_vm = True
+def get_attn_mask(bboxes_path, ori_img_size, resize_img_size, use_obj_token, use_img_token_vm):
+    attn_mask = None
+    json_data = json.load(open(bboxes_path, 'r'))
+    bboxes = json_data['<OD>']['bboxes']
+    if use_obj_token:
+        attn_mask = get_obj_token_mask(
+            bboxes=bboxes,
+            image_original_size=ori_img_size, 
+            image_resize_size=resize_img_size, 
+            patch_size=32
+        )
+
+    if use_img_token_vm:
+        vm_mask = get_img_token_vm_mask(
+            bboxes=bboxes,
+            image_original_size=ori_img_size, 
+            image_resize_size=resize_img_size, 
+            patch_size=32
+        )
+        if use_obj_token:
+            # 合并到 attn_mask 中
+            # 去掉 [CLS] 对应的第一行和第一列
+            vm_mask = vm_mask[1:, 1:]
+
+            # 替换 obj_token_mask 最右下角的 img_token 部分
+            img_token_size = vm_mask.shape[0]
+            attn_mask[-img_token_size:, -img_token_size:] = vm_mask
+        else:
+            attn_mask = vm_mask
+
+    # 如果没有使用任何 token mask，默认返回一个 -1
+    return attn_mask if attn_mask is not None else torch.tensor([-1])
+
 
 class VG_Relation(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, **kwargs):
         '''
         image_preprocess: a function that takes in a PIL image and returns a tensor.
         text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
@@ -49,8 +82,9 @@ class VG_Relation(Dataset):
             self.all_relations.append(item["relation_name"])
 
         self.image_preprocess = image_preprocess
-        self.use_vm = use_vm
         
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
 
     def __len__(self):
         return len(self.dataset)
@@ -58,7 +92,7 @@ class VG_Relation(Dataset):
     def __getitem__(self, index):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
         # Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
         # image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
 
@@ -66,31 +100,20 @@ class VG_Relation(Dataset):
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
         
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
-        if use_vm:
-            bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
-
+        
+        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
 
         # Each test case has a correct and incorrect caption.
         true_caption = test_case["true_caption"]
         false_caption = test_case["false_caption"]
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [false_caption, true_caption]})
         return item
     
     def download(self):
@@ -141,7 +164,7 @@ class VG_Relation(Dataset):
 
 
 class VG_Attribution(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, **kwargs):
         '''
         image_preprocess: a function that takes in a PIL image and returns a tensor.
         text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
@@ -172,13 +195,16 @@ class VG_Attribution(Dataset):
         self.all_attributes = [f"{item['attributes'][0]}_{item['attributes'][1]}" for item in self.dataset]
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
         # Get the bounding box that contains the relation. This is to remove the irrelevant details in the scene.
         # image = image.crop((test_case["bbox_x"], test_case["bbox_y"], test_case["bbox_x"] + test_case["bbox_w"], test_case["bbox_y"] + test_case["bbox_h"]))
 
@@ -186,30 +212,20 @@ class VG_Attribution(Dataset):
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
-        if use_vm:
-            bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
+
+        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
 
         # Each test case has a correct and incorrect caption.
         true_caption = test_case["true_caption"]
         false_caption = test_case["false_caption"]
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [false_caption, true_caption]})
         return item
     
     def download(self):
@@ -257,7 +273,7 @@ class VG_Attribution(Dataset):
 
 class COCO_Order(Dataset):
     def __init__(self, image_preprocess=None, root_dir=COCO_ROOT, max_words=30, split="test",
-                 image_perturb_fn=None, download=False):  
+                 image_perturb_fn=None, download=False, **kwargs):  
         """
         COCO Order Dataset.
         image_preprocess: image preprocessing function
@@ -304,6 +320,9 @@ class COCO_Order(Dataset):
         
         # json.dump(self.test_cases, open('/home/yifei/code/whatsup_vlms/coco.json', 'w'))
         self.image_preprocess = image_preprocess
+
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
                                     
     def __len__(self):
         return len(self.test_cases)
@@ -313,33 +332,21 @@ class COCO_Order(Dataset):
         image_path = os.path.join(self.image_root, test_case["image"])       
          
         image = Image.open(image_path).convert('RGB')  
-        ori_image_size = resize_img_size = image.size[::-1]  
+        ori_img_size = resize_img_size = image.size[::-1]  
         if self.image_preprocess is not None: 
             image = self.image_preprocess(image) 
             resize_img_size = image.shape[-2:] 
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = image_path.replace("images", "edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+        bboxes_path = image_path.replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
-        if use_vm:
-            bboxes_path = image_path.replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
-        
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case["caption_options"]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": test_case["caption_options"]})
         return item
     
     def download(self):
@@ -408,6 +415,9 @@ class Flickr30k_Order(Dataset):
         #         for perturb_fn in perturb_functions:
         #             test_case["caption_options"].append(pre_caption(perturb_fn(caption), max_words))
         #         self.test_cases.append(test_case)
+
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
                                 
     def __len__(self):
         return len(self.test_cases)
@@ -416,35 +426,23 @@ class Flickr30k_Order(Dataset):
         test_case = self.test_cases[index]  
         image_path = os.path.join(self.image_dir, test_case["image"])        
         image = Image.open(image_path).convert('RGB') 
-        ori_image_size = resize_img_size = image.size[::-1]  
+        ori_img_size = resize_img_size = image.size[::-1]  
         
         if self.image_preprocess is not None: 
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
-            
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = image_path.replace("images", "edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
 
-        if use_vm:
-            bboxes_path = image_path.replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
+        bboxes_path = image_path.replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
         
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case["caption_options"]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": test_case["caption_options"]})
         return item
     
     def evaluate_scores(self, scores):
@@ -462,7 +460,7 @@ class Flickr30k_Order(Dataset):
 
 
 class Controlled_Images(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='A'):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='A', **kwargs):
         self.root_dir = root_dir
         if subset == 'A':
             annotation_file = os.path.join(root_dir, "controlled_images_dataset.json")
@@ -536,6 +534,9 @@ class Controlled_Images(Dataset):
 
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
@@ -543,39 +544,24 @@ class Controlled_Images(Dataset):
         test_case = self.dataset[index]
         image_path = test_case["image_path"].replace('data', ARO_ROOT)
         image = Image.open(test_case["image_path"].replace('data', ARO_ROOT)).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     if self.subset == 'A':
-        #         edge_path = image_path.replace("controlled_images", "controlled_images_edges").replace(".jpeg", "_edges.pkl")
-        #     else:
-        #         edge_path = image_path.replace("controlled_clevr", "controlled_clevr_edges").replace(".jpeg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+        if self.subset == 'A':
+            bboxes_path = image_path.replace("controlled_images", "controlled_images_bboxes_merge").replace(".jpeg", "_dino.json")
+        else:
+            bboxes_path = image_path.replace("controlled_clevr", "controlled_clevr_bboxes_merge").replace(".jpeg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
-        if use_vm:
-            if self.subset == 'A':
-                bboxes_path = image_path.replace("controlled_images", "controlled_images_bboxes_merge").replace(".jpeg", "_dino.json")
-            else:
-                bboxes_path = image_path.replace("controlled_clevr", "controlled_clevr_bboxes_merge").replace(".jpeg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
-        
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": test_case['caption_options']})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": test_case['caption_options']})
         return item
 
     def download(self):
@@ -667,7 +653,7 @@ class Controlled_Images(Dataset):
 
 
 class COCO_QA(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='one'):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='one', **kwargs):
         self.root_dir = root_dir
         if subset == 'one':
             annotation_file = os.path.join(root_dir, "coco_qa_one_obj.json")
@@ -706,6 +692,9 @@ class COCO_QA(Dataset):
                     self.all_prepositions.append('below')
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
@@ -713,33 +702,21 @@ class COCO_QA(Dataset):
         test_case = self.dataset[index]
         image_path = os.path.join(self.root_dir, 'val2017/{}.jpg'.format(str(test_case[0]).zfill(12)))
         image = Image.open(os.path.join(self.root_dir, 'val2017/{}.jpg'.format(str(test_case[0]).zfill(12)))).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = image_path.replace("val2017", "val2017_edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
-
-        if use_vm:
-            bboxes_path = image_path.replace("val2017", "val2017_bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
+        bboxes_path = image_path.replace("val2017", "val2017_bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [test_case[1], test_case[2]]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [test_case[1], test_case[2]]})
         return item
 
     def download(self):
@@ -799,7 +776,7 @@ class COCO_QA(Dataset):
         return result_records, np.mean(correct_mask)
 
 class VG_QA(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='one'):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, subset='one', **kwargs):
         self.root_dir = root_dir
         if subset == 'one':
             annotation_file = os.path.join(root_dir, "vg_qa_one_obj.json")
@@ -840,6 +817,9 @@ class VG_QA(Dataset):
                     self.all_prepositions.append('top')
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
@@ -847,33 +827,21 @@ class VG_QA(Dataset):
         test_case = self.dataset[index]
         image_path = os.path.join(self.root_dir, 'vg_images/{}.jpg'.format(test_case[0]))
         image = Image.open(os.path.join(self.root_dir, 'vg_images/{}.jpg'.format(test_case[0]))).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = image_path.replace("vg_images", "vg_images_edges").replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
+        bboxes_path = image_path.replace("vg_images", "vg_images_bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
-        if use_vm:
-            bboxes_path = image_path.replace("vg_images", "vg_images_bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
-        
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [test_case[1], test_case[2]]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [test_case[1], test_case[2]]})
         return item
 
     def download(self):
@@ -933,7 +901,7 @@ class VG_QA(Dataset):
         return result_records, np.mean(correct_mask)
 
 class VL_CheckList(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False, **kwargs):
         '''
         image_preprocess: a function that takes in a PIL image and returns a tensor.
         text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
@@ -964,42 +932,33 @@ class VL_CheckList(Dataset):
         
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        # if use_vm:
-        #     edge_preprocess = copy.deepcopy(self.image_preprocess)
-        #     edge_preprocess.transforms = edge_preprocess.transforms[:2]
-        #     edge_path = test_case["image_path"].replace("images", "edges", 1).replace(".jpg", "_edges.pkl")
-        #     vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
-
-        if use_vm:
-            bboxes_path = test_case["image_path"].replace("images", "bboxes_merge", 1).replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
+        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge", 1).replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
         true_caption = test_case["POS"][0]
         false_caption = test_case["NEG"][0]
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [false_caption, true_caption]})
         return item
     
     def evaluate_scores(self, scores):
@@ -1038,7 +997,7 @@ class VL_CheckList(Dataset):
         return result_records, np.mean(correct_mask)
 
 class Sugarcrepe(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False, **kwargs):
         '''
         image_preprocess: a function that takes in a PIL image and returns a tensor.
         text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
@@ -1069,42 +1028,33 @@ class Sugarcrepe(Dataset):
         
         self.image_preprocess = image_preprocess
 
+        self.use_obj_token = kwargs.get("use_obj_token", False)
+        self.use_img_token_vm = kwargs.get("use_img_token_vm", False)
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
         test_case = self.dataset[index]
         image = Image.open(test_case["image_path"]).convert('RGB')
-        ori_image_size = resize_img_size = image.size[::-1]
+        ori_img_size = resize_img_size = image.size[::-1]
 
         if self.image_preprocess is not None:
             image = self.image_preprocess(image)
             resize_img_size = image.shape[-2:]
 
-        vm = None
-        if use_vm:
-            edge_preprocess = copy.deepcopy(self.image_preprocess)
-            edge_preprocess.transforms = edge_preprocess.transforms[:2]
-            edge_path = test_case["image_path"].replace("images", "edges").replace(".jpg", "_edges.pkl")
-            vm = get_visible_matrix_v2(image, edge_path, edge_preprocess)
-
-        if use_vm:
-            bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-            json_data = json.load(open(bboxes_path, 'r'))
-            bboxes = json_data['<OD>']['bboxes']
-            vm = get_object_token_attention_mask_v2(
-                bboxes, 
-                image_original_size=ori_image_size, 
-                image_resize_size=resize_img_size, 
-                patch_size=32, 
-                obj_token_nums=10, 
-                background_token_nums=1, 
-                use_vm=True
-            )
+        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask(
+            bboxes_path=bboxes_path,
+            ori_img_size=ori_img_size,
+            resize_img_size=resize_img_size,
+            use_obj_token=self.use_obj_token,
+            use_img_token_vm=self.use_img_token_vm
+        )
         
         true_caption = test_case["POS"]
         false_caption = test_case["NEG"]
-        item = edict({"image_options": [image], "vm": [vm], "caption_options": [false_caption, true_caption]})
+        item = edict({"image_options": [image], "attn_mask": [attn_mask], "caption_options": [false_caption, true_caption]})
         return item
     
     def evaluate_scores(self, scores):
@@ -1143,51 +1093,51 @@ class Sugarcrepe(Dataset):
         return result_records, np.mean(correct_mask)
 
 
-def get_visual_genome_relation(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
-    return VG_Relation(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download)
+def get_visual_genome_relation(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
+    return VG_Relation(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, **kwargs)
 
 
-def get_visual_genome_attribution(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_visual_genome_attribution(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return VG_Attribution(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download)
+                   image_perturb_fn=image_perturb_fn, download=download, **kwargs)
 
-def get_controlled_images_a(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_controlled_images_a(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return Controlled_Images(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='A')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='A', **kwargs)
 
-def get_controlled_images_b(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_controlled_images_b(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return Controlled_Images(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='B')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='B', **kwargs)
 
-def get_coco_qa_one_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_coco_qa_one_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return COCO_QA(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='one')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='one', **kwargs)
 
-def get_coco_qa_two_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_coco_qa_two_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return COCO_QA(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='two')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='two', **kwargs)
 
-def get_vg_qa_one_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_vg_qa_one_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return VG_QA(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='one')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='one', **kwargs)
 
-def get_vg_qa_two_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False):
+def get_vg_qa_two_obj(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, **kwargs):
     return VG_QA(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, download=download, subset='two')
+                   image_perturb_fn=image_perturb_fn, download=download, subset='two', **kwargs)
 
-def get_coco_order(image_preprocess, image_perturb_fn, text_perturb_fn, max_words=30, download=False, root_dir=COCO_ROOT, split="test"):
+def get_coco_order(image_preprocess, image_perturb_fn, text_perturb_fn, max_words=30, download=False, root_dir=COCO_ROOT, split="test", **kwargs):
     return COCO_Order(root_dir=root_dir, split=split, image_preprocess=image_preprocess, image_perturb_fn=image_perturb_fn, max_words=max_words, 
-                            download=download)
+                            download=download, **kwargs)
 
-def get_flickr30k_order(image_preprocess, image_perturb_fn, text_perturb_fn, max_words=30, download=False, root_dir=FLICKR_ROOT, split="test"):
+def get_flickr30k_order(image_preprocess, image_perturb_fn, text_perturb_fn, max_words=30, download=False, root_dir=FLICKR_ROOT, split="test", **kwargs):
     return Flickr30k_Order(root_dir=root_dir, split=split, image_preprocess=image_preprocess, image_perturb_fn=image_perturb_fn, max_words=max_words, 
-                            download=download)
+                            download=download, **kwargs)
 
-def get_vl_checklist(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=VL_CHECKLIST_ROOT):
+def get_vl_checklist(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=VL_CHECKLIST_ROOT, **kwargs):
     return VL_CheckList(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, root_dir=root_dir)
+                   image_perturb_fn=image_perturb_fn, root_dir=root_dir, **kwargs)
 
-def get_sugarcrepe(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=SUGARCREPE_ROOT):
+def get_sugarcrepe(image_preprocess, text_perturb_fn=None, image_perturb_fn=None, download=False, root_dir=SUGARCREPE_ROOT, **kwargs):
     return Sugarcrepe(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn,
-                   image_perturb_fn=image_perturb_fn, root_dir=root_dir)
+                   image_perturb_fn=image_perturb_fn, root_dir=root_dir, **kwargs)
 

@@ -18,17 +18,15 @@ def config():
     parser.add_argument("--num_workers", default=24, type=int)
     parser.add_argument("--model-name", type=str, default='ViT-B-32')
     parser.add_argument("--pretrained", type=str, default='/mnt/shared/models/open_clip/CLIP-ViT-B-32-laion2B-s34B-b79K/open_clip_pytorch_model.bin')
-    # parser.add_argument("--dataset", default="VG_Relation", type=str, \
-    #         choices=["VG_Relation", "VG_Attribution", "COCO_Order", \
-    #         "Flickr30k_Order", "Controlled_Images_A", "Controlled_Images_B", \
-    #         "COCO_QA_one_obj", "COCO_QA_two_obj", "VG_QA_one_obj", "VG_QA_two_obj"])
     parser.add_argument("--seed", default=1, type=int)
     
     parser.add_argument("--download", action="store_true", help="Whether to download the dataset if it doesn't exist. (Default: True)", default=True)
     parser.add_argument("--save-scores", action="store_true", help="Whether to save the scores for the retrieval to analyze later.")
     parser.add_argument("--output-dir", default="./outputs", type=str)
     parser.add_argument("--exp-name", type=str, default="open_clip_test")
-    parser.add_argument("--use-vm", type=bool, default=False, help="Whether to use the visual mask for the model.")
+    parser.add_argument("--use_obj_token", default=False, action="store_true", help="use object token")
+    parser.add_argument("--use_img_token_vm", default=False, action="store_true", help="use image token visible matrix")
+    parser.add_argument("--img_token_vm_layers", default=3, type=int, help="use image token visible matrix layers")
     return parser.parse_args()
 
     
@@ -37,7 +35,7 @@ def main(args):
 
     model, _, image_preprocess = create_model_and_transforms(model_name=args.model_name, pretrained=args.pretrained, device=args.device)
     model = model.eval()
-    model = CLIPWrapper(model, args.device) 
+    model = CLIPWrapper(model, args.device, use_obj_tokens=args.use_obj_token, img_token_vm_layers=args.img_token_vm_layers)
 
     datasets = [
         "VG_Attribution",
@@ -64,7 +62,7 @@ def main(args):
             print(f"Results for {dataset_name} already exist. Skipping...")
             # continue
 
-        dataset = get_dataset(dataset_name, image_preprocess=image_preprocess, download=args.download)
+        dataset = get_dataset(dataset_name, image_preprocess=image_preprocess, download=args.download, use_obj_token=args.use_obj_token, use_img_token_vm=args.use_img_token_vm)
         
         # For some models we just pass the PIL images, so we'll need to handle them in the collate_fn. 
         collate_fn = _default_collate if image_preprocess is None else None

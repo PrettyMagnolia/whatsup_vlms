@@ -6,10 +6,12 @@ import torch.nn.functional as F
 
 
 class CLIPWrapper:
-    def __init__(self, model, device):
+    def __init__(self, model, device, **kargs):
         self.model = model
         self.device = device
-    
+        self.use_obj_tokens = kargs.get("use_obj_tokens", False)
+        self.attn_mask_layers = kargs.get("img_token_vm_layers", None)
+
     @torch.no_grad()
     def get_text_embeddings(self, texts, text_batch_size=256, normalize=False):
         num_text = len(texts)
@@ -74,9 +76,13 @@ class CLIPWrapper:
         tqdm_loader.set_description("Computing retrieval scores")
         for batch in tqdm_loader:
             image_options = []
-            for i_option, vm_option in zip(batch["image_options"], batch["vm"]):
-                vm_option = vm_option.to(self.device) if vm_option is not None else None
-                image_embeddings = self.model.encode_image(i_option.to(self.device), vm_option).cpu().numpy() # B x D
+            for i_option, attn_mask in zip(batch["image_options"], batch["attn_mask"]):
+                attn_mask = attn_mask.to(self.device) if not (attn_mask == -1).any() else None
+                image_embeddings = self.model.encode_image(
+                    i_option.to(self.device), attn_mask,
+                    use_obj_tokens=self.use_obj_tokens,
+                    attn_mask_layers=self.attn_mask_layers
+                ).cpu().numpy() # B x D
                 image_embeddings = image_embeddings / np.linalg.norm(image_embeddings, axis=1, keepdims=True) # B x D
                 image_options.append(np.expand_dims(image_embeddings, axis=1))
             
