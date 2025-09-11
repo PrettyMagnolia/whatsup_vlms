@@ -1,5 +1,5 @@
-from .aro_datasets import VG_Relation, VG_Attribution, COCO_Order, Flickr30k_Order, Controlled_Images, COCO_QA, VG_QA
-from .retrieval import COCO_Retrieval, Flickr30k_Retrieval
+from .datasets_new import VG_Relation, VG_Attribution, COCO_Order, Flickr_Order, COCO_Spatial, GQA_Spatial, Whatsup, Sugarcrepe, VL_CheckList
+from .constants import VG_ARO_ROOT, COCO_ORDER_ROOT, FLICKR_ORDER_ROOT, COCO_SPATIAL_ROOT, GQA_SPATIAL_ROOT, WHATSUP_ROOT, SUGARCREPE_ROOT, VL_CHECKLIST_ROOT
 
 
 def get_dataset(dataset_name, image_preprocess=None, text_perturb_fn=None, image_perturb_fn=None, download=False, *args, **kwargs):
@@ -53,5 +53,90 @@ def get_dataset(dataset_name, image_preprocess=None, text_perturb_fn=None, image
     elif dataset_name == "Flickr30k_Retrieval":
         from .retrieval import get_flickr30k_retrieval
         return get_flickr30k_retrieval(image_preprocess=image_preprocess, text_perturb_fn=text_perturb_fn, image_perturb_fn=image_perturb_fn, download=download, *args, **kwargs)
+    else:
+        raise ValueError(f"Unknown dataset {dataset_name}")
+    
+
+def get_dataset_new(dataset_name, image_preprocess=None, **kwargs):
+    if dataset_name == "VG_Relation":
+        return VG_Relation(
+            root_dir=VG_ARO_ROOT,
+            annotation_file='vg_relation',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "VG_Attribution":
+        return VG_Attribution(
+            root_dir=VG_ARO_ROOT,
+            annotation_file='vg_attribution',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "COCO_Order":
+        return COCO_Order(
+            root_dir=COCO_ORDER_ROOT,
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "Flickr_Order":
+        return Flickr_Order(
+            root_dir=FLICKR_ORDER_ROOT,
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "COCO_Spatial_One":
+        return COCO_Spatial(
+            root_dir=COCO_SPATIAL_ROOT,
+            annotation_file='coco_spatial_one',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "COCO_Spatial_Two":
+        return COCO_Spatial(
+            root_dir=COCO_SPATIAL_ROOT,
+            annotation_file='coco_spatial_two',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "GQA_Spatial_One":
+        return GQA_Spatial(
+            root_dir=GQA_SPATIAL_ROOT,
+            annotation_file='gqa_spatial_one',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "GQA_Spatial_Two":
+        return GQA_Spatial(
+            root_dir=GQA_SPATIAL_ROOT,
+            annotation_file='gqa_spatial_two',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "Whatsup_A":
+        return Whatsup(
+            root_dir=WHATSUP_ROOT,
+            annotation_file='whatsup_a',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "Whatsup_B":
+        return Whatsup(
+            root_dir=WHATSUP_ROOT,
+            annotation_file='whatsup_b',
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "Sugarcrepe":
+        return Sugarcrepe(
+            root_dir=SUGARCREPE_ROOT,
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
+    elif dataset_name == "VL_CheckList":
+        return VL_CheckList(
+            root_dir=VL_CHECKLIST_ROOT,
+            image_preprocess=image_preprocess,
+            **kwargs
+        )
     else:
         raise ValueError(f"Unknown dataset {dataset_name}")

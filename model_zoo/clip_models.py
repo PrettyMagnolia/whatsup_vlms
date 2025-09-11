@@ -75,28 +75,50 @@ class CLIPWrapper:
         tqdm_loader = tqdm(joint_loader)
         tqdm_loader.set_description("Computing retrieval scores")
         for batch in tqdm_loader:
-            image_options = []
-            for i_option, attn_mask in zip(batch["image_options"], batch["attn_mask"]):
-                attn_mask = attn_mask.to(self.device) if not (attn_mask == -1).any() else None
-                image_embeddings = self.model.encode_image(
-                    i_option.to(self.device), attn_mask,
-                    use_obj_tokens=self.use_obj_tokens,
-                    attn_mask_layers=self.attn_mask_layers
-                ).cpu().numpy() # B x D
-                image_embeddings = image_embeddings / np.linalg.norm(image_embeddings, axis=1, keepdims=True) # B x D
-                image_options.append(np.expand_dims(image_embeddings, axis=1))
-            
+            # 先计算 caption feature
             caption_options = []
-            for c_option in batch["caption_options"]:
+            text_attn_features = None
+            for idx, c_option in enumerate(batch["caption_options"]):
                 caption_tokenized = torch.cat([clip.tokenize(c) for c in c_option])
-                caption_embeddings = self.model.encode_text(caption_tokenized.to(self.device)).cpu().numpy() # B x D
+                
+                caption_embeddings = self.model.encode_text(caption_tokenized.to(self.device))
+
+                if idx == 0:
+                    text_attn_features = caption_embeddings.clone()
+
+                caption_embeddings = caption_embeddings.cpu().numpy() # B x D
                 caption_embeddings = caption_embeddings / np.linalg.norm(caption_embeddings, axis=1, keepdims=True) # B x D
                 caption_options.append(np.expand_dims(caption_embeddings, axis=1))
                 
+            # 传入 text_attn
+            image_options = []
+            for i_option, attn_mask in zip(batch["image_options"], batch["attn_mask"]):
+                attn_mask = attn_mask.to(self.device) if not (attn_mask == -1).any() else None
+
+                if self.use_obj_tokens:
+                    image_embeddings = self.model.encode_image_with_text_attn(
+                        image=i_option.to(self.device),
+                        attn_mask=attn_mask,
+                        use_obj_tokens=self.use_obj_tokens,
+                        attn_mask_layers=self.attn_mask_layers,
+                        text_features=text_attn_features.to(self.device)
+                    ).cpu().numpy() # B x D
+
+                else:
+                    image_embeddings = self.model.encode_image(
+                        i_option.to(self.device), attn_mask,
+                        use_obj_tokens=self.use_obj_tokens,
+                        attn_mask_layers=self.attn_mask_layers
+                    ).cpu().numpy() # B x D
+                image_embeddings = image_embeddings / np.linalg.norm(image_embeddings, axis=1, keepdims=True) # B x D
+                image_options.append(np.expand_dims(image_embeddings, axis=1))
+
             image_options = np.concatenate(image_options, axis=1) # B x K x D
             caption_options = np.concatenate(caption_options, axis=1) # B x L x D
             batch_scores = np.einsum("nkd,nld->nkl", image_options, caption_options) # B x K x L
             scores.append(batch_scores)
+            
+
         
         all_scores = np.concatenate(scores, axis=0) # N x K x L
         return all_scores

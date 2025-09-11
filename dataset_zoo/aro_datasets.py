@@ -50,6 +50,38 @@ def get_attn_mask(bboxes_path, ori_img_size, resize_img_size, use_obj_token, use
     # 如果没有使用任何 token mask，默认返回一个 -1
     return attn_mask if attn_mask is not None else torch.tensor([-1])
 
+def get_attn_mask_new(bboxes, ori_img_size, resize_img_size, use_obj_token, use_img_token_vm):
+    attn_mask = None
+
+    if use_obj_token:
+        attn_mask = get_obj_token_mask(
+            bboxes=bboxes,
+            image_original_size=ori_img_size, 
+            image_resize_size=resize_img_size, 
+            patch_size=32
+        )
+
+    if use_img_token_vm:
+        vm_mask = get_img_token_vm_mask(
+            bboxes=bboxes,
+            image_original_size=ori_img_size, 
+            image_resize_size=resize_img_size, 
+            patch_size=32
+        )
+        if use_obj_token:
+            # 合并到 attn_mask 中
+            # 去掉 [CLS] 对应的第一行和第一列
+            vm_mask = vm_mask[1:, 1:]
+
+            # 替换 obj_token_mask 最右下角的 img_token 部分
+            img_token_size = vm_mask.shape[0]
+            attn_mask[-img_token_size:, -img_token_size:] = vm_mask
+        else:
+            attn_mask = vm_mask
+
+    # 如果没有使用任何 token mask，默认返回一个 -1
+    return attn_mask if attn_mask is not None else torch.tensor([-1])
+
 
 class VG_Relation(Dataset):
     def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=ARO_ROOT, download=False, **kwargs):
@@ -61,7 +93,7 @@ class VG_Relation(Dataset):
         download: Whether to download the dataset if it does not exist.
         '''
         self.root_dir = root_dir
-        annotation_file = os.path.join(root_dir, "visual_genome_relation.json")
+        annotation_file = os.path.join(root_dir, "vg_relation.jsonl")
         image_dir = os.path.join(root_dir, "images")
         if not os.path.exists(image_dir):
             print("Image Directory for VG_Relation could not be found!")
@@ -74,8 +106,8 @@ class VG_Relation(Dataset):
             subprocess.call(["gdown", "--id", "1kX2iCHEv0CADL8dSO1nMdW-V0NqIAiP3", "--output", annotation_file])
         
         with open(annotation_file, "r") as f:
-            self.dataset = json.load(f)
-        
+            self.dataset = [json.loads(line) for line in f]
+
         self.all_relations = list()
         for item in self.dataset:
             item["image_path"] = os.path.join(image_dir, item["image_path"])
@@ -101,9 +133,9 @@ class VG_Relation(Dataset):
             resize_img_size = image.shape[-2:]
         
         
-        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-        attn_mask = get_attn_mask(
-            bboxes_path=bboxes_path,
+        # bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask_new(
+            bboxes=test_case["bboxes"][:10],
             ori_img_size=ori_img_size,
             resize_img_size=resize_img_size,
             use_obj_token=self.use_obj_token,
@@ -172,7 +204,7 @@ class VG_Attribution(Dataset):
         root_dir: Directory for the VG-A dataset.
         '''
         self.root_dir = root_dir
-        annotation_file = os.path.join(root_dir, "visual_genome_attribution.json")
+        annotation_file = os.path.join(root_dir, "vg_attribution.jsonl")
         image_dir = os.path.join(root_dir, "images")
         if not os.path.exists(image_dir):
             print("Image Directory for VG_Attribution could not be found!")
@@ -186,7 +218,7 @@ class VG_Attribution(Dataset):
             subprocess.call(["gdown", "--id", "13tWvOrNOLHxl3Rm9cR3geAdHx2qR3-Tw", "--output", annotation_file])
 
         with open(annotation_file, "r") as f:
-            self.dataset = json.load(f)
+            self.dataset = [json.loads(line) for line in f] 
         
         for item in self.dataset:
             item["image_path"] = os.path.join(image_dir, item["image_path"])
@@ -213,9 +245,9 @@ class VG_Attribution(Dataset):
             resize_img_size = image.shape[-2:]
 
 
-        bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
-        attn_mask = get_attn_mask(
-            bboxes_path=bboxes_path,
+        # bboxes_path = test_case["image_path"].replace("images", "bboxes_merge").replace(".jpg", "_dino.json")
+        attn_mask = get_attn_mask_new(
+            bboxes=test_case["bboxes"][:10],
             ori_img_size=ori_img_size,
             resize_img_size=resize_img_size,
             use_obj_token=self.use_obj_token,
@@ -997,12 +1029,12 @@ class VL_CheckList(Dataset):
         return result_records, np.mean(correct_mask)
 
 class Sugarcrepe(Dataset):
-    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=VL_CHECKLIST_ROOT, download=False, **kwargs):
+    def __init__(self, image_preprocess, text_perturb_fn=None, image_perturb_fn=None, root_dir=SUGARCREPE_ROOT, download=False, **kwargs):
         '''
         image_preprocess: a function that takes in a PIL image and returns a tensor.
         text_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
         image_perturb_fn: Not used for this dataset. Just for compatibility with other datasets.
-        root_dir: Directory for the VG-R dataset.
+        root_dir: Directory for the Sugarcrepe dataset.
         download: Whether to download the dataset if it does not exist.
         '''
         self.root_dir = root_dir

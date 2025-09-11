@@ -5,7 +5,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 
 from model_zoo import get_model
-from dataset_zoo import get_dataset
+from dataset_zoo import get_dataset_new
 from misc import seed_all, _default_collate, save_scores
 
 from open_clip import create_model_and_transforms
@@ -38,18 +38,18 @@ def main(args):
     model = CLIPWrapper(model, args.device, use_obj_tokens=args.use_obj_token, img_token_vm_layers=args.img_token_vm_layers)
 
     datasets = [
-        "VG_Attribution",
-        "VG_Relation",
-        "COCO_Order",
-        "Flickr30k_Order",
-        "Controlled_Images_A",
-        "Controlled_Images_B",
-        "COCO_QA_one_obj",
-        "COCO_QA_two_obj",
-        "VG_QA_one_obj",
-        "VG_QA_two_obj",
+        # "VG_Attribution",
+        # "VG_Relation",
+        # "COCO_Order",
+        # "Flickr_Order",
+        # "COCO_Spatial_One",
+        # "COCO_Spatial_Two",
+        # "GQA_Spatial_One",
+        # "GQA_Spatial_Two",
+        # "Whatsup_A",
+        # "Whatsup_B",
+        # "Sugarcrepe",
         "VL_CheckList",
-        "Sugarcrepe",
     ]
     
     args.output_dir = os.path.join(args.output_dir, args.exp_name)
@@ -62,7 +62,7 @@ def main(args):
             print(f"Results for {dataset_name} already exist. Skipping...")
             # continue
 
-        dataset = get_dataset(dataset_name, image_preprocess=image_preprocess, download=args.download, use_obj_token=args.use_obj_token, use_img_token_vm=args.use_img_token_vm)
+        dataset = get_dataset_new(dataset_name, image_preprocess=image_preprocess, download=args.download, use_obj_token=args.use_obj_token, use_img_token_vm=args.use_img_token_vm)
         
         # For some models we just pass the PIL images, so we'll need to handle them in the collate_fn. 
         collate_fn = _default_collate if image_preprocess is None else None
